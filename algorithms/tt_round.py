@@ -13,10 +13,10 @@ from algorithms.canonical_form import right_canonicalize
 
 
 def tt_round(
-    tt: TTTensor,
-    backend: BackendInterface,
-    max_rank: int | None = None,
-    eps: float = 1e-10
+        tt: TTTensor,
+        backend: BackendInterface,
+        max_rank: int | None = None,
+        eps: float = 1e-10
 ) -> TTTensor:
     """
     Возвращает TTTensor — новый TT-тензор с уменьшенными рангами
@@ -35,133 +35,137 @@ def tt_round(
     for k in range(tt.order - 1):
         core = tt_tmp.cores[k]
         next_core = tt_tmp.cores[k + 1]
-
-        r_prev, n, r_next = core.shape
+        r_prev, n, r_next_old = core.shape
         core_mat_data = []
-        for i in range(r_prev * n):
-            for j in range(r_next):
-                core_mat_data.append(core.data[i * r_next + j])
-        core_mat = DenseTensor((r_prev * n, r_next), data=core_mat_data)
+        for r_idx in range(r_prev):
+            for n_idx in range(n):
+                for r_next_idx in range(r_next_old):
+                    flat_index = (r_idx * n + n_idx) * r_next_old + r_next_idx
+                    core_mat_data.append(core.data[flat_index])
+        core_mat = DenseTensor((r_prev * n, r_next_old), data=core_mat_data)
 
-        U, S, VT = backend.svd(core_mat)
+        # Выполняем SVD на этой матрице
+        U, S, VT = backend.svd(
+            core_mat)
+        norm_sq = sum(s * s for s in S.data)
+        norm = norm_sq ** 0.5
 
-        norm = sum(s * s for s in S.data) ** 0.5
-        threshold = eps * norm if norm > 0 else 0
-        rank = len(S.data)
-
+        threshold = eps * norm if norm > 0 else 0.0
+        rank = 0
         for r, s in enumerate(S.data):
             if s <= threshold:
                 rank = r
-                if rank == 0:
-                    rank = 1
                 break
-            if max_rank is not None and r + 1 >= max_rank:
-                rank = max_rank
-                break
+        else:
+            rank = len(S.data)
+
+        if max_rank is not None:
+            rank = min(rank, max_rank)
+
+        if rank == 0 and len(S.data) > 0:
+            rank = 1
+        elif len(S.data) == 0:
+            rank = 0
 
         if rank == 0:
-            rank = 1
+            zero_cores = [DenseTensor(core.shape, data=[0.0] * core.size) for core in tt.cores]
+            return TTTensor(zero_cores)
 
-        U_trunc_data = []
-        for i in range(r_prev * n):
-            for j in range(rank):
-                U_trunc_data.append(U.data[i * U.shape[1] + j])
-        U_trunc = DenseTensor((r_prev * n, rank), data=U_trunc_data)
+        U_trunc_cols = U.shape[1]
+        if U_trunc_cols < rank:
+            pass
 
-        S_trunc = DenseTensor((rank,), data=S.data[:rank])
+        S_trunc = _truncate_vector(S, rank, backend)
+        VT_trunc = _truncate_rows(VT, rank, backend)
+        U_for_core = _truncate_columns(U, rank, backend)
 
-        VT_trunc_data = []
-        for i in range(rank):
-            for j in range(r_next):
-                VT_trunc_data.append(VT.data[i * VT.shape[1] + j])
-        VT_trunc = DenseTensor((rank, r_next), data=VT_trunc_data)
+        new_core_k_data = []
+        for r_prev_idx in range(r_prev):
+            for n_idx in range(n):
+                for rank_idx in range(rank):
+                    current_u_part = _multiply_diag_matrix(
+                        S_trunc,
+                        U_for_core,
+                        rank,
+                        backend
+                    )
 
-        new_core_data = []
-        for r in range(r_prev):
-            for ni in range(n):
-                for s in range(rank):
-                    idx = r * n * rank + ni * rank + s
-                    new_core_data.append(U_trunc.data[idx])
-        new_cores.append(DenseTensor((r_prev, n, rank), data=new_core_data))
+                    flat_idx_in_u = (r_prev_idx * n + n_idx) * rank + rank_idx
+                    new_core_k_data.append(current_u_part.data[flat_idx_in_u])
 
-        sv_data = []
-        for r in range(rank):
-            for j in range(r_next):
-                sv_data.append(S_trunc.data[r] * VT_trunc.data[r * r_next + j])
+        new_cores.append(DenseTensor((r_prev, n, rank), data=new_core_k_data))
 
-        r_next, n_next, r_next2 = next_core.shape
+        processed_vt = _multiply_diag_matrix(
+            S_trunc,
+            VT_trunc,
+            rank,
+            backend
+        )
 
-        result_data = []
-        for r1 in range(rank):
-            for ni in range(n_next):
-                for r2 in range(r_next2):
-                    val = 0.0
-                    for t in range(r_next):
-                        val += sv_data[r1 * r_next + t] * next_core.data[t * n_next * r_next2 + ni * r_next2 + r2]
-                    result_data.append(val)
+        r_next_old_actual, n_next, r_next2 = next_core.shape
+        next_core_reshaped_data = []
+        for t_idx in range(r_next_old_actual):
+            for j_idx in range(n_next):
+                for l_idx in range(r_next2):
+                    flat_index_next = t_idx * (n_next * r_next2) + j_idx * r_next2 + l_idx
+                    next_core_reshaped_data.append(next_core.data[flat_index_next])
+        next_core_reshaped = DenseTensor((r_next_old_actual, n_next * r_next2), data=next_core_reshaped_data)
+        new_next_core_flat = backend.matmul(processed_vt, next_core_reshaped)
 
-        tt_tmp.cores[k + 1] = DenseTensor((rank, n_next, r_next2), data=result_data)
+        new_next_core_data = []
+        for rank_idx in range(rank):
+            for j_idx in range(n_next):
+                for r2_idx in range(r_next2):
+                    flat_index_result = rank_idx * (n_next * r_next2) + j_idx * r_next2 + r2_idx
+                    new_next_core_data.append(new_next_core_flat.data[flat_index_result])
 
+        tt_tmp.cores[k + 1] = DenseTensor((rank, n_next, r_next2), data=new_next_core_data)
     new_cores.append(tt_tmp.cores[-1])
 
     return TTTensor(new_cores)
 
-
-# ════════════════════════════════════════════════
-# Вспомогательные функции
-# ════════════════════════════════════════════════
-
 def _compute_rank(
-    S: DenseTensor,
-    delta: float,
-    max_rank: int | None
+        S: DenseTensor,
+        delta: float,
+        max_rank: int | None
 ) -> int:
     """
     Возвращает int ранг усечения по вектору сингулярных значений.
-
-    Args:
-        S:        одномерный тензор формы (k,) — сингулярные значения
-                  в порядке убывания
-        delta:    абсолютный порог усечения (0 — без усечения по delta)
-        max_rank: максимально допустимый ранг (None = без ограничения)
     """
-    norm = sum(s * s for s in S.data) ** 0.5
-    if norm == 0:
-        return len(S.data)
 
-    threshold = delta * norm
+    threshold = delta
     rank = 0
 
     for r, s in enumerate(S.data):
         if s <= threshold:
             rank = r + 1
             break
-        if max_rank is not None and r + 1 >= max_rank:
-            rank = max_rank
-            break
     else:
         rank = len(S.data)
 
+    if max_rank is not None:
+        rank = min(rank, max_rank)
+
+    if rank == 0 and len(S.data) > 0:
+        rank = 1
+
     return rank
 
-
 def _truncate_columns(
-    matrix: DenseTensor,
-    rank: int,
-    backend: BackendInterface
+        matrix: DenseTensor,
+        rank: int,
+        backend: BackendInterface
 ) -> DenseTensor:
     """
     Возвращает матрицу, составленную из первых rank столбцов исходной матрицы.
-
-    Args:
-        matrix:  двумерный тензор формы (m, n)
-        rank:    число сохраняемых столбцов
-        backend: интерфейс backend/
     """
     if len(matrix.shape) != 2:
         raise ValueError("matrix должна быть двумерной")
 
     m, n = matrix.shape
+    if rank > n:
+        raise ValueError(f"rank ({rank}) не может быть больше количества столбцов ({n})")
+
     data = []
     for i in range(m):
         for j in range(rank):
@@ -171,22 +175,20 @@ def _truncate_columns(
 
 
 def _truncate_rows(
-    matrix: DenseTensor,
-    rank: int,
-    backend: BackendInterface
+        matrix: DenseTensor,
+        rank: int,
+        backend: BackendInterface
 ) -> DenseTensor:
     """
     Возвращает матрицу, составленную из первых rank строк исходной матрицы.
-
-    Args:
-        matrix:  двумерный тензор формы (k, n)
-        rank:    число сохраняемых строк
-        backend: интерфейс backend
     """
     if len(matrix.shape) != 2:
         raise ValueError("matrix должна быть двумерной")
 
     k, n = matrix.shape
+    if rank > k:
+        raise ValueError(f"rank ({rank}) не может быть больше количества строк ({k})")
+
     data = []
     for i in range(rank):
         for j in range(n):
@@ -194,43 +196,54 @@ def _truncate_rows(
 
     return DenseTensor((rank, n), data=data)
 
+
 def _truncate_vector(
-    vector: DenseTensor,
-    rank: int,
-    backend: BackendInterface
+        vector: DenseTensor,
+        rank: int,
+        backend: BackendInterface
 ) -> DenseTensor:
     """
     Возвращает вектор, состоящий из первых rank элементов исходного вектора.
-
-    Args:
-        vector:  одномерный тензор формы (k,)
-        rank:    число сохраняемых элементов
-        backend: интерфейс backend
     """
     if len(vector.shape) != 1:
         raise ValueError("vector должна быть одномерной")
+
+    if rank > len(vector.data):
+        raise ValueError(f"rank ({rank}) не может быть больше длины вектора ({len(vector.data)})")
+
     return DenseTensor((rank,), data=vector.data[:rank])
 
 
 def _multiply_diag_matrix(
-    diag_vec: DenseTensor,
-    matrix: DenseTensor,
-    rank: int,
-    backend: BackendInterface
+        diag_vec: DenseTensor,
+        matrix: DenseTensor,
+        rank: int,
+        backend: BackendInterface
 ) -> DenseTensor:
     """
-    Возвращает произведение диагональной матрицы на обычную матрицу:
-        diag(diag_vec) @ matrix
+    Возвращает произведение диагональной матрицы A @ matrix,
+    где A = diag(diag_vec).
+    A имеет форму (rank, rank). matrix может быть (rank, n) или (m, rank).
 
     Args:
         diag_vec: одномерный тензор формы (rank,), содержащий диагональные элементы
-        matrix:   двумерный тензор формы (rank, n)
-        rank:     число строк матрицы и длина диагонального вектора
+        matrix:   двумерный тензор формы (rank, n) или (m, rank)
+        rank:     число строк/столбцов диагональной матрицы.
         backend:  интерфейс backend
     """
-    data = []
-    for r in range(rank):
-        scalar = diag_vec.data[r]
-        for j in range(matrix.shape[1]):
-            data.append(scalar * matrix.data[r * matrix.shape[1] + j])
-    return DenseTensor((rank, matrix.shape[1]), data=data)
+    if len(diag_vec.shape) != 1 or diag_vec.shape[0] != rank:
+        raise ValueError(f"diag_vec должен быть одномерным формы ({rank},)")
+    if len(matrix.shape) != 2 or matrix.shape[0] != rank and matrix.shape[1] != rank:
+        raise ValueError(f"matrix должна быть двумерной с одной из размерностей равной {rank}")
+
+    result_data = []
+
+    if matrix.shape[0] == rank:
+        m, n = matrix.shape
+        for r in range(rank):
+            scalar = diag_vec.data[r]
+            for col_idx in range(n):
+                result_data.append(scalar * matrix.data[r * n + col_idx])
+        return DenseTensor((rank, n), data=result_data)
+    else:
+        raise ValueError
