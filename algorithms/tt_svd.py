@@ -71,7 +71,7 @@ def tt_svd(
     last_core = DenseTensor((ranks[-1], shape[-1], 1), data=last_core_data)
     cores.append(last_core)
 
-    return TTTensor(cores, shape)
+    return TTTensor(cores)
 
     pass
 
