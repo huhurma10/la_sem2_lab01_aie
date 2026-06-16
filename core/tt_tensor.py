@@ -57,7 +57,6 @@ class TTTensor:
             ranks.append(r_next)
         self.ranks = tuple(ranks)
         self.shape = tuple(core.shape[1] for core in cores)
-        pass
 
 
     @staticmethod
@@ -96,7 +95,6 @@ class TTTensor:
             core = DenseTensor((r_prev, n_i, r_next), data=data)
             cores.append(core)
         return TTTensor(cores)
-        pass
 
     # ────────────────────────────────────────────
     # Доступ к элементам
@@ -114,19 +112,22 @@ class TTTensor:
         """
         if len(indices) != self.order:
             raise IndexError("длина индексов должна совпадать с порядком тензора.")
-        current = [1.0]
+        result = [1.0]
+
         for k in range(self.order):
-            i = indices[k]
-            next_current = []
+            i_k = indices[k]
             core = self.cores[k]
-            for r_prev_idx, r_prev in enumerate(range(self.ranks[k])):
-                for r_next_idx, r_next in enumerate(range(self.ranks[k+1])):
-                    val = core.data[r_prev * core.shape[1] * core.shape[2] + i * core.shape[2] + r_next]
-                    for val_in in current[r_prev_idx]:
-                        next_current.append(val_in * val)
-            current = next_current
-        return current[0] if len(current) == 1 else sum(current)
-        pass
+            r_prev, n_k, r_next = core.shape
+
+            new_result = [0.0] * r_next
+
+            for alpha in range(r_prev):
+                for beta in range(r_next):
+                    idx = alpha * n_k * r_next + i_k * r_next + beta
+                    new_result[beta] += result[alpha] * core.data[idx]
+
+            result = new_result
+        return result[0]
 
     # ────────────────────────────────────────────
     # Восстановление полного тензора
@@ -134,26 +135,39 @@ class TTTensor:
 
     def full(self) -> DenseTensor:
         """Возвращает полный DenseTensor из его TT-формата."""
-        result_data = [1.0]
-        result_shape = []
+        core = self.cores[0]
+        r_0, n_0, r_1 = core.shape
 
-        for k in range(self.order):
+        result = []
+        for i in range(n_0):
+            for j in range(r_1):
+                result.append(core.data[i * r_1 + j])
+
+        result_shape = (n_0, r_1)
+        for k in range(1, self.order):
             core = self.cores[k]
             r_prev, n_k, r_next = core.shape
-            new_data = []
-            for prev_idx, i_k in itertools.product(range(len(result_data) // r_prev), range(n_k)):
-                for r_idx in range(r_prev):
-                    val = 0.0
-                    for r_next_idx in range(r_next):
-                        # индекс ядра
-                        core_idx = r_idx * n_k * r_next + i_k * r_next + r_next_idx
-                        val += result_data[prev_idx * r_prev + r_idx] * core.data[core_idx]
-                    new_data.append(val)
-            result_data = new_data
-            result_shape.append(n_k)
 
-        return DenseTensor(tuple(result_shape), data=result_data)
-        pass
+            prev_size = len(result) // r_prev
+            new_result = []
+
+            for prev_idx in range(prev_size):
+                for i_k in range(n_k):
+                    for r_next_idx in range(r_next):
+                        val = 0.0
+                        for r_prev_idx in range(r_prev):
+                            prev_val = result[prev_idx * r_prev + r_prev_idx]
+                            core_idx = r_prev_idx * n_k * r_next + i_k * r_next + r_next_idx
+                            core_val = core.data[core_idx]
+                            val += prev_val * core_val
+                        new_result.append(val)
+
+            result = new_result
+            result_shape = result_shape[:-1] + (n_k, r_next)
+        final_shape = result_shape[:-1]
+        final_data = [result[i] for i in range(len(result)) if i % result_shape[-1] == 0]
+
+        return DenseTensor(final_shape, data=final_data)
 
     # ────────────────────────────────────────────
     # Информация и отладка
@@ -162,7 +176,6 @@ class TTTensor:
     def core_sizes(self):
         """Возвращает размеры всех ядер."""
         return [core.shape for core in self.cores]
-        pass
 
     def total_storage(self) -> int:
         """
@@ -170,7 +183,6 @@ class TTTensor:
         Это то, сколько памяти реально занимает TT-тензор.
         """
         return sum(core.size for core in self.cores)
-        pass
 
     def compression_ratio(self) -> float:
         """
@@ -179,13 +191,11 @@ class TTTensor:
         """
         full_size = compute_size(self.shape)
         return full_size / self.total_storage()
-        pass
 
     def copy(self) -> TTTensor:
         """Возвращает глубокую копию TT-тензора."""
         cores_copy = [core.copy() for core in self.cores]
         return TTTensor(cores_copy)
-        pass
 
     def __repr__(self) -> str:
         """
@@ -205,7 +215,6 @@ class TTTensor:
             f"TTTensor(order={self.order}, shape={self.shape}, "
             f"ranks={self.ranks}, total_storage={self.total_storage()})"
         )
-        pass
 
     def __str__(self) -> str:
         """
