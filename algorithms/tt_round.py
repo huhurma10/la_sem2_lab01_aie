@@ -27,34 +27,77 @@ def tt_round(
         max_rank: максимальный TT-ранг (None = без ограничения)
         eps:      относительная точность усечения
     """
-    cores = [core.copy() for core in tt.cores]
-    d = tt.order
-
-    tt_tmp = TTTensor(cores)
+    tt_tmp = TTTensor([core.copy() for core in tt.cores])
     right_canonicalize(tt_tmp, backend)
 
     new_cores = []
-    for k in range(d - 1):
+
+    for k in range(tt.order - 1):
         core = tt_tmp.cores[k]
-        core_mat = DenseTensor(
-            (core.shape[0], core.shape[1] * core.shape[2]),
-            data=[core.data[r * core.shape[1] * core.shape[2] + j] for r in range(core.shape[0]) for j in range(core.shape[1] * core.shape[2])]
-        )
+        next_core = tt_tmp.cores[k + 1]
+
+        mat_data = []
+        for i in range(core.shape[0] * core.shape[1]):
+            r = i // core.shape[1]
+            n = i % core.shape[1]
+            for j in range(core.shape[2]):
+                mat_data.append(core.data[r * core.shape[1] * core.shape[2] + n * core.shape[2] + j])
+
+        core_mat = DenseTensor((core.shape[0] * core.shape[1], core.shape[2]), data=mat_data)
 
         U, S, VT = backend.svd(core_mat)
-        rank = _compute_rank(S, eps, max_rank)
-        U_truncated = _truncate_columns(U, rank, backend)
-        S_truncated = _truncate_vector(S, rank, backend)
-        VT_truncated = _truncate_rows(VT, rank, backend)
-        new_core_data = []
-        for r in range(rank):
-            for i in range(cores[k+1].shape[1]):
-                new_core_data.append(S_truncated.data[r] * VT_truncated.data[r * cores[k+1].shape[1] + i])
-        new_core = DenseTensor((rank, cores[k+1].shape[1], cores[k+1].shape[2]), data=new_core_data)
-        new_cores.append(_multiply_diag_matrix(U_truncated, S_truncated, rank, backend))
-        cores[k+1] = new_core
 
-    new_cores.append(cores[-1])
+        norm = sum(s * s for s in S.data) ** 0.5
+        threshold = eps * norm if norm > 0 else 0
+        rank = 0
+        for r, s in enumerate(S.data):
+            if s <= threshold or (max_rank is not None and r + 1 >= max_rank):
+                rank = r + 1 if s <= threshold else max_rank
+                break
+        else:
+            rank = len(S.data)
+
+        U_data = []
+        for i in range(core.shape[0] * core.shape[1]):
+            for j in range(rank):
+                U_data.append(U.data[i * U.shape[1] + j])
+        U_trunc = DenseTensor((core.shape[0] * core.shape[1], rank), data=U_data)
+
+        S_data = S.data[:rank]
+        VT_data = []
+        for i in range(rank):
+            for j in range(VT.shape[1]):
+                VT_data.append(VT.data[i * VT.shape[1] + j])
+        VT_trunc = DenseTensor((rank, VT.shape[1]), data=VT_data)
+
+        new_core_data = []
+        for r in range(core.shape[0]):
+            for n in range(core.shape[1]):
+                for s in range(rank):
+                    new_core_data.append(U_trunc.data[r * core.shape[1] * rank + n * rank + s])
+        new_cores.append(DenseTensor((core.shape[0], core.shape[1], rank), data=new_core_data))
+
+        sv_data = []
+        for r in range(rank):
+            for n in range(next_core.shape[1]):
+                for s in range(next_core.shape[2]):
+                    idx = r * (next_core.shape[1] * next_core.shape[2]) + n * next_core.shape[2] + s
+                    sv_data.append(S_data[r] * VT_trunc.data[idx])
+
+        result_data = []
+        for r1 in range(rank):
+            for n in range(next_core.shape[1]):
+                for r2 in range(next_core.shape[2]):
+                    val = 0.0
+                    for t in range(next_core.shape[2]):
+                        idx1 = r1 * next_core.shape[1] * next_core.shape[2] + n * next_core.shape[2] + t
+                        idx2 = next_core.shape[0] * next_core.shape[1] * t + n * next_core.shape[2] + r2
+                        val += sv_data[idx1] * next_core.data[idx2]
+                    result_data.append(val)
+
+        tt_tmp.cores[k + 1] = DenseTensor((rank, next_core.shape[1], next_core.shape[2]), data=result_data)
+
+    new_cores.append(tt_tmp.cores[-1])
     return TTTensor(new_cores)
     pass
 
@@ -77,12 +120,24 @@ def _compute_rank(
         delta:    абсолютный порог усечения (0 — без усечения по delta)
         max_rank: максимально допустимый ранг (None = без ограничения)
     """
-    for r in range(len(S.data)):
-        if S.data[r] <= delta:
-            return r
+    norm = sum(s * s for s in S.data) ** 0.5
+    if norm == 0:
+        return len(S.data)
+
+    threshold = delta * norm
+    rank = 0
+
+    for r, s in enumerate(S.data):
+        if s <= threshold:
+            rank = r + 1
+            break
         if max_rank is not None and r + 1 >= max_rank:
-            return r + 1
-    return len(S.data)
+            rank = max_rank
+            break
+    else:
+        rank = len(S.data)
+
+    return rank
     pass
 
 
@@ -99,7 +154,16 @@ def _truncate_columns(
         rank:    число сохраняемых столбцов
         backend: интерфейс backend
     """
-    return _truncate_vector(DenseTensor((matrix.shape[1],), data=matrix.data), rank, backend).reshape((matrix.shape[0], rank))
+    if len(matrix.shape) != 2:
+        raise ValueError("matrix должна быть двумерной")
+
+    m, n = matrix.shape
+    data = []
+    for i in range(m):
+        for j in range(rank):
+            data.append(matrix.data[i * n + j])
+
+    return DenseTensor((m, rank), data=data)
     pass
 
 
@@ -116,7 +180,16 @@ def _truncate_rows(
         rank:    число сохраняемых строк
         backend: интерфейс backend
     """
-    return _truncate_vector(DenseTensor((matrix.shape[0],), data=matrix.data), rank, backend).reshape((rank, matrix.shape[1]))
+    if len(matrix.shape) != 2:
+        raise ValueError("matrix должна быть двумерной")
+
+    k, n = matrix.shape
+    data = []
+    for i in range(rank):
+        for j in range(n):
+            data.append(matrix.data[i * n + j])
+
+    return DenseTensor((rank, n), data=data)
     pass
 
 

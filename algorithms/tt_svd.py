@@ -29,12 +29,13 @@ def tt_svd(
     shape = tensor.shape
     d = len(shape)
     cores = []
-    residual = tensor
+    residual = DenseTensor(shape, data=tensor.data.copy())
     ranks = [1]
 
     for k in range(d - 1):
-        m, n = residual.shape
-        residual = residual.reshape((m, n))
+        l = math.prod(shape[:k+1])
+        r = math.prod(shape[k + 1:])
+        residual = residual.reshape((l, r))
         U, S, Vt = backend.svd(residual)
         rank = _compute_truncated_rank(S, eps, max_rank)
         U_trunc = _truncate_columns(U, rank, backend)
@@ -43,9 +44,12 @@ def tt_svd(
 
         # Создаем ядро
         core_data = []
-        for r in range(rank):
+        for r in range(rank[-1]):
             for i in range(shape[k]):
-                core_data.append(U_trunc.data[r * shape[k] + i])
+                for s in range(rank):
+                    idx = r * shape[k] * rank + s * shape[k] + i
+                    core_data.append(U_trunc.data[idx])\
+
         core = DenseTensor((ranks[-1], shape[k], rank), data=core_data)
         cores.append(core)
         # Обновляем residual
@@ -57,13 +61,13 @@ def tt_svd(
         ranks.append(rank)
 
     # Последнее ядро
-    last_core = DenseTensor((ranks[-1], shape[-1], 1), data=[])
+    last_core_data = []
     for r in range(ranks[-1]):
         for i in range(shape[-1]):
-            last_core.data.append(1.0)
-    cores.append(last_core)
+            last_core_data.append(residual.data[r * shape[-1] + i])
 
-    return TTTensor(cores)
+    last_core = DenseTensor((ranks[-1], shape[-1], 1), data=last_core_data)
+    cores.append(last_core)
     pass
 
 
@@ -84,14 +88,19 @@ def _compute_truncated_rank(
         delta:    порог усечения
         max_rank: максимальный ранг (None = без ограничения)
     """
-    rank = 0
     total = sum(S.data)
-    accum = 0.0
+    if total == 0:
+        return len(S.data)
+
     threshold = delta * total
+    rank = 1
+
     for r, s in enumerate(S.data):
-        accum += s
-        if s <= delta or (max_rank is not None and r + 1 >= max_rank):
+        if s <= threshold:
             rank = r + 1
+            break
+        if s <= delta or (max_rank is not None and r + 1 >= max_rank):
+            rank = max_rank
             break
     else:
         rank = len(S.data)
@@ -117,7 +126,11 @@ def _truncate_columns(
     """
     if len(matrix.shape) != 2:
         raise ValueError("matrix должна быть двумерной")
-    data = matrix.data[:matrix.shape[0] * rank]
+    m, n = matrix.shape
+    data = []
+    for i in range(m):
+        for j in range(rank):
+            data.append(matrix.data[i * n + j])
     return DenseTensor((matrix.shape[0], rank), data=data)
     pass
 
@@ -137,6 +150,11 @@ def _truncate_rows(
     """
     if len(matrix.shape) != 2:
         raise ValueError()
+    k, n = matrix.shape
+    data = []
+    for i in range(rank):
+        for j in range(n):
+            data.append(matrix.data[i * n + j])
     data = matrix.data[:rank * matrix.shape[1]]
     return DenseTensor((rank, matrix.shape[1]), data=data)
     pass
@@ -177,6 +195,11 @@ def _multiply_diag_matrix(
         rank:     число строк матрицы и длина диагонального вектора
         backend:  интерфейс backend
     """
+    if len(diag_vec.shape) != 1 or len(matrix.shape) != 2:
+        raise ValueError()
+
+    if diag_vec.shape[0] != rank or matrix.shape[0] != rank:
+        raise ValueError()
     data = []
     for r in range(rank):
         scalar = diag_vec.data[r]
