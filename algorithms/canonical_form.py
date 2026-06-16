@@ -53,6 +53,19 @@ def _numerical_rank(
         rel_tol: относительный допуск (по умолчанию 1e-8)
         abs_tol: абсолютный допуск (по умолчанию 1e-12)
     """
+    if S.shape[0] == 0:
+        return 0
+
+    sigma_max = float(S[0])
+    threshold = max(abs_tol, rel_tol * sigma_max)
+
+    rank = 0
+    for i in range(S.shape[0]):
+        if abs(float(S[i])) > threshold:
+            rank += 1
+        else:
+            break
+    return rank
     pass
 
 
@@ -72,6 +85,17 @@ def _truncate_columns(
         rank:    число сохраняемых столбцов
         backend: интерфейс backend
     """
+    if rank >= matrix.shape[1]:
+        return matrix.copy()
+
+    result_shape = (matrix.shape[0], rank)
+    result = DenseTensor(result_shape)
+
+    for i in range(matrix.shape[0]):
+        for j in range(rank):
+            result[i, j] = matrix[i, j]
+
+    return result
     pass
 
 
@@ -88,6 +112,17 @@ def _truncate_rows(
         rank:    число сохраняемых строк
         backend: интерфейс backend
     """
+    if rank >= matrix.shape[0]:
+        return matrix.copy()
+
+    result_shape = (rank, matrix.shape[1])
+    result = DenseTensor(result_shape)
+
+    for i in range(rank):
+        for j in range(matrix.shape[1]):
+            result[i, j] = matrix[i, j]
+
+    return result
     pass
 
 
@@ -104,6 +139,14 @@ def _truncate_vector(
         rank:    число сохраняемых элементов
         backend: интерфейс backend
     """
+    if rank >= vector.shape[0]:
+        return vector.copy()
+
+    result = DenseTensor((rank,))
+    for i in range(rank):
+        result[i] = vector[i]
+
+    return result
     pass
 
 
@@ -123,6 +166,15 @@ def _multiply_diag_matrix(
         rank:     длина диагонального вектора
         backend:  интерфейс backend
     """
+    result_shape = (rank, matrix.shape[1])
+    result = DenseTensor(result_shape)
+
+    for i in range(rank):
+        diag_val = float(diag_vec[i])
+        for j in range(matrix.shape[1]):
+            result[i, j] = diag_val * matrix[i, j]
+
+    return result
     pass
 
 
@@ -140,4 +192,13 @@ def _multiply_columns_by_diag(
         diag_vec: одномерный тензор формы (rank,), содержащий диагональные элементы
         backend:  интерфейс backend
     """
+    rank = diag_vec.shape[0]
+    result_shape = (matrix.shape[0], rank)
+    result = DenseTensor(result_shape)
+
+    for i in range(matrix.shape[0]):
+        for j in range(rank):
+            result[i, j] = matrix[i, j] * float(diag_vec[j])
+
+    return result
     pass
