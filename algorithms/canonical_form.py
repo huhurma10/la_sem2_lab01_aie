@@ -150,7 +150,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         cores[k - 1] = DenseTensor((r_prev_prev, n_prev, rank), data=new_prev_data)
 
     return TTTensor(cores)
-    pass
 
 
 # ════════════════════════════════════════════════
@@ -187,7 +186,6 @@ def _numerical_rank(
         else:
             break
     return rank
-    pass
 
 
 def _truncate_columns(
@@ -210,14 +208,12 @@ def _truncate_columns(
         return matrix.copy()
 
     result_shape = (matrix.shape[0], rank)
-    result = DenseTensor(result_shape)
-
+    result_data = []
     for i in range(matrix.shape[0]):
         for j in range(rank):
-            result[i, j] = matrix[i, j]
+            result_data.append(matrix.data[i * matrix.shape[1] + j])
 
-    return result
-    pass
+    return DenseTensor(result_shape, data=result_data)
 
 
 def _truncate_rows(
@@ -237,14 +233,12 @@ def _truncate_rows(
         return matrix.copy()
 
     result_shape = (rank, matrix.shape[1])
-    result = DenseTensor(result_shape)
-
+    result_data = []
     for i in range(rank):
         for j in range(matrix.shape[1]):
-            result[i, j] = matrix[i, j]
+            result_data.append(matrix.data[i * matrix.shape[1] + j])
 
-    return result
-    pass
+    return DenseTensor(result_shape, data=result_data)
 
 
 def _truncate_vector(
@@ -265,10 +259,9 @@ def _truncate_vector(
 
     result = DenseTensor((rank,))
     for i in range(rank):
-        result[i] = vector[i]
+        result.data[i] = vector.data[i]
 
     return result
-    pass
 
 
 def _multiply_diag_matrix(
@@ -288,15 +281,14 @@ def _multiply_diag_matrix(
         backend:  интерфейс backend
     """
     result_shape = (rank, matrix.shape[1])
-    result = DenseTensor(result_shape)
+    result_data = []
 
     for i in range(rank):
-        diag_val = float(diag_vec[i])
+        diag_val = float(diag_vec.data[i])
         for j in range(matrix.shape[1]):
-            result[i, j] = diag_val * matrix[i, j]
+            result_data.append(diag_val * matrix.data[i * matrix.shape[1] + j])
 
-    return result
-    pass
+    return DenseTensor(result_shape, data=result_data)
 
 
 def _multiply_columns_by_diag(
@@ -315,11 +307,10 @@ def _multiply_columns_by_diag(
     """
     rank = diag_vec.shape[0]
     result_shape = (matrix.shape[0], rank)
-    result = DenseTensor(result_shape)
+    result_data = []
 
     for i in range(matrix.shape[0]):
         for j in range(rank):
-            result[i, j] = matrix[i, j] * float(diag_vec[j])
+            result_data.append(matrix.data[i * matrix.shape[1] + j] * float(diag_vec.data[j]))
 
-    return result
-    pass
+    return DenseTensor(result_shape, data=result_data)
