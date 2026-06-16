@@ -23,55 +23,75 @@ from core.tt_tensor import TTTensor
 from core.dense_tensor import DenseTensor
 from processor_type.interface import BackendInterface
 
-
 Number = int | float
 
 
 def tt_add(
-    tt1: TTTensor,
-    tt2: TTTensor,
-    backend: BackendInterface
+        tt1: TTTensor,
+        tt2: TTTensor,
+        backend: BackendInterface
 ) -> TTTensor:
     """
     Возвращает результат поэлементного сложения двух TT-тензоров.
+
+    Сложение двух TT-тензоров выполняется путем конкатенации ядер:
+    Для каждого ядра k создается блочная матрица:
+        core_k = [[core1_k, 0],
+                  [0, core2_k]]
+    с соответствующими рангами: r_k = r1_k + r2_k
 
     Args:
         tt1, tt2: TTTensor с одинаковым shape
         backend:  интерфейс backend
     """
-    d = len(tt1.cores)
+    if tt1.shape != tt2.shape:
+        raise ValueError("Формы тензоров должны совпадать")
+
+    d = tt1.order
     new_cores = []
 
     for k in range(d):
-        g = tt1.cores[k]
-        h = tt2.cores[k]
+        core1 = tt1.cores[k]
+        core2 = tt2.cores[k]
 
-        rg0, n, rg1 = g.shape
-        rh0, _, rh1 = h.shape
+        r1_prev, n1, r1_next = core1.shape
+        r2_prev, n2, r2_next = core2.shape
 
-        if k == 0:
-            data = backend.zeros((1, n, rg1 + rh1))
-            data[:, :, :rg1] = g.data
-            data[:, :, rg1:] = h.data
-        elif k == d - 1:
-            data = backend.zeros((rg0 + rh0, n, 1))
-            data[:rg0, :, :] = g.data
-            data[rg0:, :, :] = h.data
-        else:
-            data = backend.zeros((rg0 + rh0, n, rg1 + rh1))
+        # Проверяем, что размерности мод совпадают
+        if n1 != n2:
+            raise ValueError(f"Размерность моды {k} не совпадает: {n1} vs {n2}")
+        n = n1
 
-            data[:rg0, :, :rg1] = g.data
-            data[rg0:, :, rg1:] = h.data
+        # Новые ранги: сумма рангов
+        r_prev = r1_prev + r2_prev
+        r_next = r1_next + r2_next
 
-        new_cores.append(DenseTensor(data.shape, data=data))
+        # Создаем новое ядро размером (r_prev, n, r_next)
+        new_core_data = []
+        for i in range(r_prev):
+            for j in range(n):
+                for k_idx in range(r_next):
+                    if i < r1_prev and k_idx < r1_next:
+                        # Берем из первого ядра
+                        val = core1.data[i * n * r1_next + j * r1_next + k_idx]
+                    elif i >= r1_prev and k_idx >= r1_next:
+                        # Берем из второго ядра
+                        i2 = i - r1_prev
+                        k2 = k_idx - r1_next
+                        val = core2.data[i2 * n * r2_next + j * r2_next + k2]
+                    else:
+                        val = 0.0
+                    new_core_data.append(float(val))
+
+        new_cores.append(DenseTensor((r_prev, n, r_next), data=new_core_data))
 
     return TTTensor(new_cores)
 
 
 def tt_scalar_mul(
-    tt: TTTensor,
-    alpha: Number,
-    backend: BackendInterface
+        tt: TTTensor,
+        alpha: Number,
+        backend: BackendInterface
 ) -> TTTensor:
     """
     Возвращает результат умножения TT-тензора на скаляр.
@@ -82,147 +102,164 @@ def tt_scalar_mul(
         alpha:   число
         backend: интерфейс backend
     """
-    new_cores = []
-    for i, core in enumerate(tt.cores):
-        if i == 0:
-            new_data = [a * alpha for a in core.data]
-            new_core = DenseTensor(core.shape, data=new_data)
-        else:
-            new_core = core.copy()
-        new_cores.append(new_core)
+    if not isinstance(alpha, (int, float)):
+        raise TypeError("alpha должно быть числом")
+
+    # Создаем копию тензора
+    new_cores = [core.copy() for core in tt.cores]
+
+    # Умножаем первое ядро на скаляр
+    r_prev, n, r_next = new_cores[0].shape
+    new_data = [float(alpha) * val for val in new_cores[0].data]
+    new_cores[0] = DenseTensor((r_prev, n, r_next), data=new_data)
+
     return TTTensor(new_cores)
 
 
 def tt_hadamard(
-    tt1: TTTensor,
-    tt2: TTTensor,
-    backend: BackendInterface
+        tt1: TTTensor,
+        tt2: TTTensor,
+        backend: BackendInterface
 ) -> TTTensor:
     """
     Возвращает результат поэлементного произведения (произведения Адамара).
+
+    Произведение Адамара двух TT-тензоров выполняется путем кронекеровского
+    произведения ядер:
+        core_k = core1_k ⊗ core2_k
+    с рангами: r_k = r1_k * r2_k
 
     Args:
         tt1, tt2: TTTensor с одинаковым shape
         backend:  интерфейс backend
     """
     if tt1.shape != tt2.shape:
-        raise ValueError()
+        raise ValueError("Формы тензоров должны совпадать")
 
+    d = tt1.order
     new_cores = []
 
-    for k in range(tt1.order):
+    for k in range(d):
         core1 = tt1.cores[k]
         core2 = tt2.cores[k]
 
-        r_prev1, n, r_next1 = core1.shape
-        r_prev2, _, r_next2 = core2.shape
+        r1_prev, n1, r1_next = core1.shape
+        r2_prev, n2, r2_next = core2.shape
 
-        new_r_prev = r_prev1 * r_prev2
-        new_r_next = r_next1 * r_next2
+        if n1 != n2:
+            raise ValueError(f"Размерность моды {k} не совпадает: {n1} vs {n2}")
+        n = n1
 
-        new_data = []
+        # Новые ранги: произведение рангов
+        r_prev = r1_prev * r2_prev
+        r_next = r1_next * r2_next
 
-        for rp1 in range(r_prev1):
-            for rp2 in range(r_prev2):
-                for i in range(n):
-                    for rn1 in range(r_next1):
-                        for rn2 in range(r_next2):
-                            idx1 = rp1 * n * r_next1 + i * r_next1 + rn1
-                            idx2 = rp2 * n * r_next2 + i * r_next2 + rn2
-                            new_data.append(core1.data[idx1] * core2.data[idx2])
+        # Кронекеровское произведение ядер
+        new_core_data = []
+        for i1 in range(r1_prev):
+            for i2 in range(r2_prev):
+                for j in range(n):
+                    for k1 in range(r1_next):
+                        for k2 in range(r2_next):
+                            val1 = core1.data[i1 * n * r1_next + j * r1_next + k1]
+                            val2 = core2.data[i2 * n * r2_next + j * r2_next + k2]
+                            new_core_data.append(float(val1 * val2))
 
-        new_core = DenseTensor((new_r_prev, n, new_r_next), data=new_data)
-        new_cores.append(new_core)
+        new_cores.append(DenseTensor((r_prev, n, r_next), data=new_core_data))
+
     return TTTensor(new_cores)
-    pass
 
 
 def tt_dot(
-    tt1: TTTensor,
-    tt2: TTTensor,
-    backend: BackendInterface
+        tt1: TTTensor,
+        tt2: TTTensor,
+        backend: BackendInterface
 ) -> Number:
     """
     Возвращает скалярное произведение двух TT-тензоров: <tt1, tt2>.
+
+    Вычисляется как сумма по всем индексам произведения соответствующих элементов.
+    Используется эффективный алгоритм через последовательное сжатие ядер.
 
     Args:
         tt1, tt2: TTTensor с одинаковым shape
         backend:  интерфейс backend
     """
-    result = backend.eye(1)
+    if tt1.shape != tt2.shape:
+        raise ValueError("Формы тензоров должны совпадать")
 
-    for k in range(tt1.order):
+    d = tt1.order
+
+    # Инициализируем матрицу размера (r1_0 * r2_0, r1_0 * r2_0)
+    # r1_0 = r2_0 = 1, поэтому это скаляр
+    result = DenseTensor((1, 1), data=[1.0])
+
+    for k in range(d):
         core1 = tt1.cores[k]
         core2 = tt2.cores[k]
 
-        mat1_data = []
-        mat2_data = []
+        r1_prev, n, r1_next = core1.shape
+        r2_prev, _, r2_next = core2.shape
 
-        r_prev, n, r_next = core1.shape
+        # Вычисляем скалярное произведение ядер с учетом предыдущего результата
+        new_size = r1_next * r2_next
+        new_data = [0.0] * (new_size * new_size)
 
-        for i in range(r_prev * n):
-            r = i // n
-            ni = i % n
-            for j in range(r_next):
-                mat1_data.append(core1.data[r * n * r_next + ni * r_next + j])
-                mat2_data.append(core2.data[r * n * r_next + ni * r_next + j])
+        for i1 in range(r1_prev):
+            for i2 in range(r2_prev):
+                for j in range(n):
+                    for k1 in range(r1_next):
+                        for k2 in range(r2_next):
+                            val1 = core1.data[i1 * n * r1_next + j * r1_next + k1]
+                            val2 = core2.data[i2 * n * r2_next + j * r2_next + k2]
 
-        mat1 = DenseTensor((r_prev * n, r_next), data=mat1_data)
-        mat2 = DenseTensor((r_prev * n, r_next), data=mat2_data)
+                            # Умножаем на предыдущий результат
+                            prev_val = result.data[0]
+                            idx_out = k1 * r2_next + k2
+                            new_data[idx_out * new_size + idx_out] += float(prev_val * val1 * val2)
 
-        product = [[0.0] * r_next for _ in range(r_next)]
+        result = DenseTensor((new_size, new_size), data=new_data)
 
-        for i in range(r_next):
-            for j in range(r_next):
-                s = 0.0
-                for k_idx in range(r_prev * n):
-                    s += mat1.data[k_idx * r_next + i] * mat2.data[k_idx * r_next + j]
-                product[i][j] = s
-
-        new_result = [[0.0] * r_next for _ in range(len(result))]
-
-        for i in range(len(result)):
-            for j in range(r_next):
-                s = 0.0
-                for k_idx in range(len(result[0])):
-                    s += result[i][k_idx] * product[k_idx][j]
-                new_result[i][j] = s
-
-        result = new_result
-    return result[0][0]
-    pass
+    # Возвращаем единственный элемент
+    return result.data[0]
 
 
 def tt_norm(
-    tt: TTTensor,
-    backend: BackendInterface
+        tt: TTTensor,
+        backend: BackendInterface
 ) -> float:
     """
     Возвращает Фробениусову норму TT-тензора.
+
+    Используется tt_dot(tt, tt).
 
     Args:
         tt:      TTTensor
         backend: интерфейс backend
     """
-    return math.sqrt(tt_dot(tt, tt, backend))
-    pass
+    dot_product = tt_dot(tt, tt, backend)
+    return math.sqrt(float(dot_product))
 
 
 def tt_diff_norm(
-    tt1: TTTensor,
-    tt2: TTTensor,
-    backend: BackendInterface
+        tt1: TTTensor,
+        tt2: TTTensor,
+        backend: BackendInterface
 ) -> float:
     """
     Возвращает норму разности: ||tt1 - tt2||_F.
-    Вычисляется без восстановления полных тензоров:
+    Вычисляется без восстановления полных тензоров
 
     Args:
         tt1, tt2: TTTensor
         backend:  интерфейс backend
     """
-    norm_a = tt_norm(tt1, backend)
-    norm_b = tt_norm(tt2, backend)
-    inner_ab = tt_dot(tt1, tt2, backend)
-    return math.sqrt(norm_a ** 2 + norm_b ** 2 - 2 * inner_ab)
-    pass
+    norm1_sq = tt_dot(tt1, tt1, backend)
+    norm2_sq = tt_dot(tt2, tt2, backend)
+    dot = tt_dot(tt1, tt2, backend)
+
+    diff_sq = float(norm1_sq - 2 * dot + norm2_sq)
+    if diff_sq < 0 and diff_sq > -1e-10:
+        diff_sq = 0.0
+
+    return math.sqrt(max(0.0, diff_sq))
