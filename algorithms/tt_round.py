@@ -37,51 +37,46 @@ def tt_round(
         next_core = tt_tmp.cores[k + 1]
 
         r_prev, n, r_next = core.shape
-        mat_data = []
+        core_mat_data = []
         for i in range(r_prev * n):
-            r = i // n
-            ni = i % n
             for j in range(r_next):
-                mat_data.append(core.data[r * n * r_next + ni * r_next + j])
-
-        core_mat = DenseTensor((core.shape[0] * core.shape[1], core.shape[2]), data=mat_data)
+                core_mat_data.append(core.data[i * r_next + j])
+        core_mat = DenseTensor((r_prev * n, r_next), data=core_mat_data)
 
         U, S, VT = backend.svd(core_mat)
 
         norm = sum(s * s for s in S.data) ** 0.5
         threshold = eps * norm if norm > 0 else 0
-        rank = 0
+        rank = len(S.data)
+
         for r, s in enumerate(S.data):
-            if s <= threshold or (max_rank is not None and r + 1 >= max_rank):
-                rank = r + 1 if s <= threshold else max_rank
+            if s <= threshold:
+                rank = r
+                if rank == 0:
+                    rank = 1
                 break
-        else:
-            rank = len(S.data)
+            if max_rank is not None and r + 1 >= max_rank:
+                rank = max_rank
+                break
 
         if rank == 0:
             rank = 1
 
-        U_data = []
-        for i in range(core.shape[0] * core.shape[1]):
+        U_trunc_data = []
+        for i in range(r_prev * n):
             for j in range(rank):
-                U_data.append(U.data[i * U.shape[1] + j])
-        U_trunc = DenseTensor((core.shape[0] * core.shape[1], rank), data=U_data)
+                U_trunc_data.append(U.data[i * U.shape[1] + j])
+        U_trunc = DenseTensor((r_prev * n, rank), data=U_trunc_data)
 
-        S_data = S.data[:rank]
-        VT_data = []
+        S_trunc = DenseTensor((rank,), data=S.data[:rank])
+
+        VT_trunc_data = []
         for i in range(rank):
-            for j in range(VT.shape[1]):
-                VT_data.append(VT.data[i * VT.shape[1] + j])
-        VT_trunc = DenseTensor((rank, VT.shape[1]), data=VT_data)
+            for j in range(r_next):
+                VT_trunc_data.append(VT.data[i * VT.shape[1] + j])
+        VT_trunc = DenseTensor((rank, r_next), data=VT_trunc_data)
 
         new_core_data = []
-        for r in range(core.shape[0]):
-            for n in range(core.shape[1]):
-                for s in range(rank):
-                    new_core_data.append(U_trunc.data[r * core.shape[1] * rank + n * rank + s])
-        new_cores.append(DenseTensor((core.shape[0], core.shape[1], rank), data=new_core_data))
-
-        sv_data = []
         for r in range(r_prev):
             for ni in range(n):
                 for s in range(rank):
@@ -92,23 +87,24 @@ def tt_round(
         sv_data = []
         for r in range(rank):
             for j in range(r_next):
-                sv_data.append(S_data[r] * VT_trunc.data[r * r_next + j])
+                sv_data.append(S_trunc.data[r] * VT_trunc.data[r * r_next + j])
 
         r_next, n_next, r_next2 = next_core.shape
+
         result_data = []
         for r1 in range(rank):
-            for n in range(n_next):
+            for ni in range(n_next):
                 for r2 in range(r_next2):
                     val = 0.0
                     for t in range(r_next):
                         val += sv_data[r1 * r_next + t] * next_core.data[t * n_next * r_next2 + ni * r_next2 + r2]
                     result_data.append(val)
 
-        tt_tmp.cores[k + 1] = DenseTensor((rank, next_core.shape[1], next_core.shape[2]), data=result_data)
+        tt_tmp.cores[k + 1] = DenseTensor((rank, n_next, r_next2), data=result_data)
 
     new_cores.append(tt_tmp.cores[-1])
+
     return TTTensor(new_cores)
-    pass
 
 
 # ════════════════════════════════════════════════
@@ -147,7 +143,6 @@ def _compute_rank(
         rank = len(S.data)
 
     return rank
-    pass
 
 
 def _truncate_columns(
@@ -173,7 +168,6 @@ def _truncate_columns(
             data.append(matrix.data[i * n + j])
 
     return DenseTensor((m, rank), data=data)
-    pass
 
 
 def _truncate_rows(
@@ -199,8 +193,6 @@ def _truncate_rows(
             data.append(matrix.data[i * n + j])
 
     return DenseTensor((rank, n), data=data)
-    pass
-
 
 def _truncate_vector(
     vector: DenseTensor,
@@ -218,7 +210,6 @@ def _truncate_vector(
     if len(vector.shape) != 1:
         raise ValueError("vector должна быть одномерной")
     return DenseTensor((rank,), data=vector.data[:rank])
-    pass
 
 
 def _multiply_diag_matrix(
@@ -243,4 +234,3 @@ def _multiply_diag_matrix(
         for j in range(matrix.shape[1]):
             data.append(scalar * matrix.data[r * matrix.shape[1] + j])
     return DenseTensor((rank, matrix.shape[1]), data=data)
-    pass
