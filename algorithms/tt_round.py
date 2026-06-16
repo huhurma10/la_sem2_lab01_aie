@@ -156,7 +156,7 @@ def _truncate_columns(
     Args:
         matrix:  двумерный тензор формы (m, n)
         rank:    число сохраняемых столбцов
-        backend: интерфейс backend
+        backend: интерфейс backend/
     """
     if len(matrix.shape) != 2:
         raise ValueError("matrix должна быть двумерной")
