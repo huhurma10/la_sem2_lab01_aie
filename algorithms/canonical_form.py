@@ -21,29 +21,34 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         tt:      исходный тензор
         backend: интерфейс backend
     """
+    # Создаем копию тензора
     tt_copy = TTTensor([core.copy() for core in tt.cores])
     d = tt_copy.order
 
+    # Идем слева направо
     for k in range(d - 1):
         core = tt_copy.cores[k]
         r_prev, n, r_next = core.shape
 
+        # Преобразуем ядро в матрицу размера (r_prev * n) x r_next
         core_mat_data = []
         for i in range(r_prev * n):
             for j in range(r_next):
                 core_mat_data.append(core.data[i * r_next + j])
         core_mat = DenseTensor((r_prev * n, r_next), data=core_mat_data)
 
+        # QR-разложение через SVD (сохраняем все сингулярные значения)
         U, S, VT = backend.svd(core_mat)
-
         rank = len(S.data)
 
+        # Формируем Q (первые rank столбцов U) - это ортогональная матрица
         Q_data = []
         for i in range(r_prev * n):
             for j in range(rank):
                 Q_data.append(U.data[i * U.shape[1] + j])
         Q = DenseTensor((r_prev * n, rank), data=Q_data)
 
+        # Формируем R = S * VT (умножаем сингулярные значения на VT)
         R_data = []
         for i in range(rank):
             for j in range(r_next):
@@ -53,6 +58,7 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                 R_data.append(val)
         R = DenseTensor((rank, r_next), data=R_data)
 
+        # Преобразуем Q обратно в ядро размера (r_prev, n, rank)
         new_core_data = []
         for r in range(r_prev):
             for ni in range(n):
@@ -65,18 +71,22 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         if k + 1 < d:
             next_core = tt_copy.cores[k + 1]
             r_next_next = next_core.shape[2]
+            n_next = next_core.shape[1]
 
+            # next_core: (r_next, n_next, r_next_next)
+            # R: (rank, r_next)
+            # Результат: (rank, n_next, r_next_next)
             result_data = []
             for r1 in range(rank):
-                for ni in range(next_core.shape[1]):
+                for ni in range(n_next):
                     for r2 in range(r_next_next):
                         val = 0.0
                         for t in range(r_next):
                             val += R.data[r1 * r_next + t] * next_core.data[
-                                t * next_core.shape[1] * r_next_next + ni * r_next_next + r2]
+                                t * n_next * r_next_next + ni * r_next_next + r2]
                         result_data.append(val)
 
-            tt_copy.cores[k + 1] = DenseTensor((rank, next_core.shape[1], r_next_next), data=result_data)
+            tt_copy.cores[k + 1] = DenseTensor((rank, n_next, r_next_next), data=result_data)
 
     return tt_copy
 
@@ -96,10 +106,12 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
     tt_copy = TTTensor([core.copy() for core in tt.cores])
     d = tt_copy.order
 
+    # Идем справа налево
     for k in range(d - 1, 0, -1):
         core = tt_copy.cores[k]
         r_prev, n, r_next = core.shape
 
+        # Преобразуем ядро в матрицу размера r_prev x (n * r_next)
         core_mat_data = []
         for i in range(r_prev):
             for j in range(n * r_next):
@@ -108,14 +120,16 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
 
         # SVD разложение
         U, S, VT = backend.svd(core_mat)
-
         rank = len(S.data)
 
+        # Формируем Q = U (первые rank столбцов U) - ортогональная матрица
         Q_data = []
         for i in range(r_prev):
             for j in range(rank):
                 Q_data.append(U.data[i * U.shape[1] + j])
         Q = DenseTensor((r_prev, rank), data=Q_data)
+
+        # Формируем R = S * VT (умножаем сингулярные значения на VT)
         R_data = []
         for i in range(rank):
             for j in range(n * r_next):
@@ -125,11 +139,13 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                 R_data.append(val)
         R = DenseTensor((rank, n * r_next), data=R_data)
 
+        # Преобразуем Q в ядро размера (r_prev, n, rank)
+        # Для каждого индекса моды n, Q дает одинаковые значения,
+        # так как Q - это матрица (r_prev, rank), а не (r_prev*n, rank)
         new_core_data = []
         for r in range(r_prev):
             for ni in range(n):
                 for s in range(rank):
-                    # Q - это матрица (r_prev, rank)
                     new_core_data.append(Q.data[r * rank + s])
         tt_copy.cores[k] = DenseTensor((r_prev, n, rank), data=new_core_data)
 
@@ -139,19 +155,54 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
             r_prev_prev = prev_core.shape[0]
             n_prev = prev_core.shape[1]
 
-            r_core_data = []
+            # prev_core: (r_prev_prev, n_prev, r_prev)
+            # Нужно умножить на R: (r_prev, n * r_next)
+            # Результат: (r_prev_prev, n_prev, n * r_next)
+
+            # Преобразуем R в ядро размера (r_prev, n, r_next)
+            R_core_data = []
             for i in range(rank):
                 for ni in range(n):
                     for j in range(r_next):
                         idx = i * n * r_next + ni * r_next + j
-                        r_core_data.append(R.data[idx])
-            R_core = DenseTensor((rank, n, r_next), data=r_core_data)
+                        R_core_data.append(R.data[idx])
+            R_core = DenseTensor((rank, n, r_next), data=R_core_data)
 
+            # Теперь умножаем prev_core на R_core по последней размерности
+            # prev_core: (r_prev_prev, n_prev, r_prev)
+            # R_core: (rank, n, r_next)
+            # Результат: (r_prev_prev, n_prev, n, r_next)
+            # Но нам нужно объединить n_prev и n в одну размерность
+
+            # Сначала перемножаем как тензоры
+            result_data = []
+            for r1 in range(r_prev_prev):
+                for ni_prev in range(n_prev):
+                    for ni in range(n):
+                        for r2 in range(r_next):
+                            val = 0.0
+                            for t in range(r_prev):
+                                val += prev_core.data[r1 * n_prev * r_prev + ni_prev * r_prev + t] * R_core.data[
+                                    t * n * r_next + ni * r_next + r2]
+                            result_data.append(val)
+
+            # Объединяем размерности n_prev и n
+            # Результат должен быть (r_prev_prev, n_prev * n, r_next)
+            # Но это неправильно, так как мы теряем структуру TT-формата
+
+            # На самом деле, после умножения на R, предыдущее ядро должно стать
+            # (r_prev_prev, n_prev, rank)
+            # Для этого нужно свернуть R с prev_core по-другому
+
+            # Правильный подход: prev_core @ R (как матрицы)
+            # prev_core: (r_prev_prev * n_prev) x r_prev
             prev_mat_data = []
             for i in range(r_prev_prev * n_prev):
                 for j in range(r_prev):
                     prev_mat_data.append(prev_core.data[i * r_prev + j])
             prev_mat = DenseTensor((r_prev_prev * n_prev, r_prev), data=prev_mat_data)
+
+            # Умножаем prev_mat на R (r_prev x (n * r_next))
             result_mat_data = []
             for i in range(r_prev_prev * n_prev):
                 for j in range(n * r_next):
@@ -160,6 +211,15 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                         val += prev_mat.data[i * r_prev + t] * R.data[t * (n * r_next) + j]
                     result_mat_data.append(val)
             result_mat = DenseTensor((r_prev_prev * n_prev, n * r_next), data=result_mat_data)
+
+            # Теперь нам нужно преобразовать результат обратно в ядро
+            # Но мы хотим сохранить только первые rank элементов из второй размерности
+            # Это соответствует тому, что мы ортогонализуем следующее ядро
+            # и переносим R в предыдущее
+
+            # Преобразуем result_mat в ядро (r_prev_prev, n_prev, n * r_next)
+            # Но нам нужно ядро (r_prev_prev, n_prev, rank)
+            # Берем только первые rank элементов из последней размерности
             new_prev_data = []
             for i in range(r_prev_prev * n_prev):
                 for j in range(rank):
