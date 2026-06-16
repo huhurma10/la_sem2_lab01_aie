@@ -34,7 +34,7 @@ def tt_svd(
 
     for k in range(d - 1):
         l = math.prod(shape[:k+1])
-        r = math.prod(shape[k + 1:])
+        r = math.prod(shape[k+1:])
         residual = residual.reshape((l, r))
         U, S, Vt = backend.svd(residual)
         rank = _compute_truncated_rank(S, eps, max_rank)
@@ -44,7 +44,8 @@ def tt_svd(
 
         # Создаем ядро
         core_data = []
-        for r in range(rank[-1]):
+        current_rank = ranks[-1]
+        for r in range(current_rank):
             for i in range(shape[k]):
                 for s in range(rank):
                     idx = r * shape[k] * rank + s * shape[k] + i
@@ -55,6 +56,7 @@ def tt_svd(
         # Обновляем residual
         residual_data = []
         for r_idx in range(rank):
+            scalar = S_trunc.data[r_idx]
             for j in range(Vt_trunc.shape[1]):
                 residual_data.append(S_trunc.data[r_idx] * Vt_trunc.data[r_idx * Vt_trunc.shape[1] + j])
         residual = DenseTensor((rank, residual.shape[1]), data=residual_data)
@@ -68,6 +70,9 @@ def tt_svd(
 
     last_core = DenseTensor((ranks[-1], shape[-1], 1), data=last_core_data)
     cores.append(last_core)
+
+    return TTTensor(cores, shape)
+
     pass
 
 

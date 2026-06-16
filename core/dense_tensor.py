@@ -130,7 +130,7 @@ class DenseTensor:
         """
         def get_shape(lst: list) -> list:
             shape = []
-            while isinstance(lst, list):
+            while isinstance(lst, (list, tuple)):
                 shape.append(len(lst))
                 if len(lst) == 0:
                     break
@@ -138,7 +138,7 @@ class DenseTensor:
             return shape
 
         def flatten(nested_list: list) -> List[float]:
-            if not isinstance(nested_list, list):
+            if not isinstance(nested_list, (list, tuple)):
                 return [nested_list]
             result = []
             for item in nested_list:

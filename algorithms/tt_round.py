@@ -36,12 +36,13 @@ def tt_round(
         core = tt_tmp.cores[k]
         next_core = tt_tmp.cores[k + 1]
 
+        r_prev, n, r_next = core.shape
         mat_data = []
-        for i in range(core.shape[0] * core.shape[1]):
-            r = i // core.shape[1]
-            n = i % core.shape[1]
-            for j in range(core.shape[2]):
-                mat_data.append(core.data[r * core.shape[1] * core.shape[2] + n * core.shape[2] + j])
+        for i in range(r_prev * n):
+            r = i // n
+            ni = i % n
+            for j in range(r_next):
+                mat_data.append(core.data[r * n * r_next + ni * r_next + j])
 
         core_mat = DenseTensor((core.shape[0] * core.shape[1], core.shape[2]), data=mat_data)
 
@@ -56,6 +57,9 @@ def tt_round(
                 break
         else:
             rank = len(S.data)
+
+        if rank == 0:
+            rank = 1
 
         U_data = []
         for i in range(core.shape[0] * core.shape[1]):
@@ -78,21 +82,26 @@ def tt_round(
         new_cores.append(DenseTensor((core.shape[0], core.shape[1], rank), data=new_core_data))
 
         sv_data = []
-        for r in range(rank):
-            for n in range(next_core.shape[1]):
-                for s in range(next_core.shape[2]):
-                    idx = r * (next_core.shape[1] * next_core.shape[2]) + n * next_core.shape[2] + s
-                    sv_data.append(S_data[r] * VT_trunc.data[idx])
+        for r in range(r_prev):
+            for ni in range(n):
+                for s in range(rank):
+                    idx = r * n * rank + ni * rank + s
+                    new_core_data.append(U_trunc.data[idx])
+        new_cores.append(DenseTensor((r_prev, n, rank), data=new_core_data))
 
+        sv_data = []
+        for r in range(rank):
+            for j in range(r_next):
+                sv_data.append(S_data[r] * VT_trunc.data[r * r_next + j])
+
+        r_next, n_next, r_next2 = next_core.shape
         result_data = []
         for r1 in range(rank):
-            for n in range(next_core.shape[1]):
-                for r2 in range(next_core.shape[2]):
+            for n in range(n_next):
+                for r2 in range(r_next2):
                     val = 0.0
-                    for t in range(next_core.shape[2]):
-                        idx1 = r1 * next_core.shape[1] * next_core.shape[2] + n * next_core.shape[2] + t
-                        idx2 = next_core.shape[0] * next_core.shape[1] * t + n * next_core.shape[2] + r2
-                        val += sv_data[idx1] * next_core.data[idx2]
+                    for t in range(r_next):
+                        val += sv_data[r1 * r_next + t] * next_core.data[t * n_next * r_next2 + ni * r_next2 + r2]
                     result_data.append(val)
 
         tt_tmp.cores[k + 1] = DenseTensor((rank, next_core.shape[1], next_core.shape[2]), data=result_data)
