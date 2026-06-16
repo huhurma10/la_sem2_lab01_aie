@@ -39,13 +39,33 @@ def tt_add(
         tt1, tt2: TTTensor с одинаковым shape
         backend:  интерфейс backend
     """
+    d = len(tt1.cores)
     new_cores = []
-    for core1, core2 in zip(tt1.cores, tt2.cores):
-        core_sum_data = [a + b for a, b in zip(core1.data, core2.data)]
-        new_core = DenseTensor(core1.shape, data=core_sum_data)
-        new_cores.append(new_core)
+
+    for k in range(d):
+        g = tt1.cores[k]
+        h = tt2.cores[k]
+
+        rg0, n, rg1 = g.shape
+        rh0, _, rh1 = h.shape
+
+        if k == 0:
+            data = backend.zeros((1, n, rg1 + rh1))
+            data[:, :, :rg1] = g.data
+            data[:, :, rg1:] = h.data
+        elif k == d - 1:
+            data = backend.zeros((rg0 + rh0, n, 1))
+            data[:rg0, :, :] = g.data
+            data[rg0:, :, :] = h.data
+        else:
+            data = backend.zeros((rg0 + rh0, n, rg1 + rh1))
+
+            data[:rg0, :, :rg1] = g.data
+            data[rg0:, :, rg1:] = h.data
+
+        new_cores.append(DenseTensor(data.shape, data=data))
+
     return TTTensor(new_cores)
-    pass
 
 
 def tt_scalar_mul(
@@ -71,7 +91,6 @@ def tt_scalar_mul(
             new_core = core.copy()
         new_cores.append(new_core)
     return TTTensor(new_cores)
-    pass
 
 
 def tt_hadamard(

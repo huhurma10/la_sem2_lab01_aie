@@ -46,7 +46,7 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
             mat_T = transpose_matrix(mat)
             Q_t, R_t = backend.qr(mat_T)
 
-            rank = min(mat.shape[0], mat.shape[1])
+            rank = min(mat.shape)
 
         Q_data = []
         for i in range(mat.shape[0]):
