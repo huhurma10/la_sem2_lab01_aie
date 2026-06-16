@@ -246,14 +246,15 @@ class DenseTensor:
         other_dims = self.shape[:mode] + self.shape[mode+1:]
         rows = self.shape[mode]
         cols = compute_size(other_dims)
-        result_data = []
+        data = []
         for i in range(rows):
             for j in range(cols):
-                indices = list(flat_to_multi_index(i, self.shape))
-                indices[mode] = flat_to_multi_index(j, other_dims)
-                flat_idx = multi_index_to_flat(tuple(indices), self.strides)
-                result_data.append(self.data[flat_idx])
-        return DenseTensor((rows, cols), data=result_data)
+                multi_idx_other = flat_to_multi_index(j, other_dims)
+                multi_idx_full = list(multi_idx_other)
+                multi_idx_full.insert(mode, i)
+                flat_idx = multi_index_to_flat(tuple(multi_idx_full), self.strides)
+                data.append(self.data[flat_idx])
+        return DenseTensor((rows, cols), data=data)
         pass
 
     def left_unfolding(self, k: int) -> DenseTensor:
@@ -269,15 +270,15 @@ class DenseTensor:
         right_dims = self.shape[k+1:]
         rows = compute_size(left_dims)
         cols = compute_size(right_dims)
-        result_data = []
+        data = []
         for i in range(rows):
+            multi_idx_left = flat_to_multi_index(i, left_dims)
             for j in range(cols):
-                indices = list(flat_to_multi_index(i, self.shape))
-                left_indices = indices[:k+1]
-                right_indices = indices[k+1:]
-                flat_idx = multi_index_to_flat(tuple(indices), self.strides)
-                result_data.append(self.data[flat_idx])
-        return DenseTensor((rows, cols), data=result_data)
+                multi_idx_right = flat_to_multi_index(j, right_dims)
+                full_idx = list(multi_idx_left) + list(multi_idx_right)
+                flat_idx = multi_index_to_flat(tuple(full_idx), self.strides)
+                data.append(self.data[flat_idx])
+        return DenseTensor((rows, cols), data=data)
         pass
 
     # ────────────────────────────────────────────
