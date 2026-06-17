@@ -27,88 +27,162 @@ def tt_round(
         max_rank: максимальный TT-ранг (None = без ограничения)
         eps:      относительная точность усечения
     """
-    tt_tmp = right_canonicalize(tt, backend)
+    cores = [core.copy() for core in tt.cores]
+    d = tt.order
+
+    for k in range(d - 1, 0, -1):
+        core = cores[k]
+        r_prev, n, r_next = core.shape
+
+        # Развернуть ядро в матрицу (r_prev) x (n * r_next)
+        A_data = []
+        for i in range(r_prev):
+            for j in range(n * r_next):
+                A_data.append(core.data[i * n * r_next + j])
+        A = DenseTensor((r_prev, n * r_next), data=A_data)
+
+        # SVD
+        U, S, VT = backend.svd(A)
+
+        # Новый ранг – минимальный из возможных для ортогонализации, но с учётом max_rank
+        r_new = min(r_prev, n * r_next)
+        if max_rank is not None:
+            r_new = min(r_new, max_rank)
+        if r_new == 0:
+            r_new = 1
+
+        # Q = V^T (первые r_new строк) – ортонормированные строки
+        Q_data = []
+        for i in range(r_new):
+            for j in range(n * r_next):
+                Q_data.append(VT.data[i * (n * r_next) + j])
+        Q = DenseTensor((r_new, n * r_next), data=Q_data)
+
+        # R = U * S (первые r_new столбцов U и первые r_new сингулярных значений)
+        R_data = []
+        for i in range(r_prev):
+            for j in range(r_new):
+                val = 0.0
+                for s in range(r_new):
+                    val += U.data[i * U.shape[1] + s] * S.data[s]
+                R_data.append(val)
+        R = DenseTensor((r_prev, r_new), data=R_data)
+
+        # Свернуть Q в ядро (r_new, n, r_next)
+        new_core_data = []
+        for i in range(r_new):
+            for j in range(n):
+                for l in range(r_next):
+                    idx = i * (n * r_next) + j * r_next + l
+                    new_core_data.append(Q.data[idx])
+        cores[k] = DenseTensor((r_new, n, r_next), data=new_core_data)
+
+        # Поглотить R в предыдущее ядро
+        prev_core = cores[k - 1]
+        r_prev_prev, n_prev, _ = prev_core.shape
+
+        # prev_core как матрица (r_prev_prev * n_prev) x r_prev
+        prev_mat_data = []
+        for i in range(r_prev_prev * n_prev):
+            for j in range(r_prev):
+                prev_mat_data.append(prev_core.data[i * r_prev + j])
+        prev_mat = DenseTensor((r_prev_prev * n_prev, r_prev), data=prev_mat_data)
+
+        # Умножить prev_mat на R
+        result_data = []
+        for i in range(r_prev_prev * n_prev):
+            for j in range(r_new):
+                val = 0.0
+                for t in range(r_prev):
+                    val += prev_mat.data[i * r_prev + t] * R.data[t * r_new + j]
+                result_data.append(val)
+
+        cores[k - 1] = DenseTensor(
+            (r_prev_prev, n_prev, r_new),
+            data=result_data
+        )
+
+    # --- Левый проход с SVD-усечением (стандартный TT-rounding) ---
     new_cores = []
 
-    for k in range(tt.order - 1):
-        core = tt_tmp.cores[k]
-        next_core = tt_tmp.cores[k + 1]
+    for k in range(d - 1):
+        core = cores[k]
+        next_core = cores[k + 1]
         r_prev, n, r_next = core.shape
-        core_mat_data = []
-        for r_idx in range(r_prev):
-            for n_idx in range(n):
-                for r_next_idx in range(r_next):
-                    flat_index = (r_idx * n + n_idx) * r_next + r_next_idx
-                    core_mat_data.append(core.data[flat_index])
-        core_mat = DenseTensor((r_prev * n, r_next), data=core_mat_data)
 
-        # Выполняем SVD на этой матрице
-        U, S, VT = backend.svd(core_mat)
+        # Развернуть ядро в матрицу (r_prev * n) x r_next
+        A_data = []
+        for i in range(r_prev * n):
+            for j in range(r_next):
+                A_data.append(core.data[i * r_next + j])
+        A = DenseTensor((r_prev * n, r_next), data=A_data)
+
+        # SVD
+        U, S, VT = backend.svd(A)
+
+        # Вычисляем порог и новый ранг
         norm_sq = sum(s * s for s in S.data)
-        norm = norm_sq ** 0.5
-
+        norm = norm_sq ** 0.5 if norm_sq > 0 else 0.0
         threshold = eps * norm if norm > 0 else 0.0
-        rank = 0
-        for r, s in enumerate(S.data):
+
+        r_new = len(S.data)
+        for i, s in enumerate(S.data):
             if s <= threshold:
-                rank = r
-                if rank == 0:
-                    rank = 1
+                r_new = i
+                if r_new == 0:
+                    r_new = 1
                 break
-        else:
-            rank = len(S.data)
-
         if max_rank is not None:
-            rank = min(rank, max_rank)
+            r_new = min(r_new, max_rank)
+        if r_new == 0:
+            r_new = 1
 
-        if rank == 0 and len(S.data) > 0:
-            rank = 1
-        elif len(S.data) == 0:
-            rank = 0
-
+        # Усекаем U
         U_trunc_data = []
         for i in range(r_prev * n):
-            for j in range(rank):
+            for j in range(r_new):
                 U_trunc_data.append(U.data[i * U.shape[1] + j])
-        U_trunc = DenseTensor((r_prev * n, rank), data=U_trunc_data)
+        U_trunc = DenseTensor((r_prev * n, r_new), data=U_trunc_data)
 
-        # Усекаем S
-        S_trunc = DenseTensor((rank,), data=S.data[:rank])
+        S_trunc = DenseTensor((r_new,), data=S.data[:r_new])
 
-        # Усекаем VT до размера rank x r_next
         VT_trunc_data = []
-        for i in range(rank):
+        for i in range(r_new):
             for j in range(r_next):
                 VT_trunc_data.append(VT.data[i * VT.shape[1] + j])
-        VT_trunc = DenseTensor((rank, r_next), data=VT_trunc_data)
+        VT_trunc = DenseTensor((r_new, r_next), data=VT_trunc_data)
 
+        # Формируем новое ядро
         new_core_data = []
-
         for r in range(r_prev):
             for ni in range(n):
-                for s in range(rank):
-                    idx = r * n * rank + ni * rank + s
+                for s in range(r_new):
+                    idx = r * n * r_new + ni * r_new + s
                     new_core_data.append(U_trunc.data[idx])
-        new_cores.append(DenseTensor((r_prev, n, rank), data=new_core_data))
+        new_cores.append(DenseTensor((r_prev, n, r_new), data=new_core_data))
 
-        # Умножаем S на VT
+        # Обновляем следующее ядро: R = S * V^T
         sv_data = []
-        for r in range(rank):
+        for i in range(r_new):
             for j in range(r_next):
-                sv_data.append(S_trunc.data[r] * VT_trunc.data[r * r_next + j])
+                val = 0.0
+                for s in range(r_new):
+                    val += S_trunc.data[s] * VT_trunc.data[s * r_next + j]
+                sv_data.append(val)
 
-        # Умножаем полученную матрицу на следующий core
-        r_next, n_next, r_next2 = next_core.shape
+        r_next_old, n_next, r_next2 = next_core.shape
         result_data = []
-        for r1 in range(rank):
+        for i in range(r_new):
             for ni in range(n_next):
-                for r2 in range(r_next2):
+                for j in range(r_next2):
                     val = 0.0
-                    for t in range(r_next):
-                        val += sv_data[r1 * r_next + t] * next_core.data[t * n_next * r_next2 + ni * r_next2 + r2]
+                    for t in range(r_next_old):
+                        val += sv_data[i * r_next_old + t] * next_core.data[t * n_next * r_next2 + ni * r_next2 + j]
                     result_data.append(val)
-        tt_tmp.cores[k + 1] = DenseTensor((rank, n_next, r_next2), data=result_data)
-    new_cores.append(tt_tmp.cores[-1])
+        cores[k + 1] = DenseTensor((r_new, n_next, r_next2), data=result_data)
+
+    # Добавляем последнее ядро
+    new_cores.append(cores[-1])
 
     return TTTensor(new_cores)
 

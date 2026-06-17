@@ -98,7 +98,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         backend: интерфейс backend
     """
     tt_copy = TTTensor([core.copy() for core in tt.cores])
-    tt_copy = TTTensor([core.copy() for core in tt.cores])
     d = tt_copy.order
 
     for k in range(d - 1, 0, -1):
