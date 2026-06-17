@@ -34,23 +34,8 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                 core_mat_data.append(core.data[i * r_next + j])
         core_mat = DenseTensor((r_prev * n, r_next), data=core_mat_data)
 
-        U, S, VT = backend.svd(core_mat)
-
-        rank = len(S.data)
-
-        Q_data = []
-        for i in range(r_prev * n):
-            for j in range(rank):
-                Q_data.append(U.data[i * U.shape[1] + j])
-
-        Q = DenseTensor((r_prev * n, rank), data=Q_data)
-
-        R_data = []
-        for i in range(rank):
-            for j in range(r_next):
-                R_data.append(S.data[i] * VT.data[i * r_next + j])
-
-        R = DenseTensor((rank, r_next), data=R_data)
+        Q, R = backend.qr(core_mat)
+        rank = Q.shape[1]
 
         new_core_data = []
         for r in range(r_prev):
@@ -103,25 +88,17 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
             data=list(core.data)
         )
 
-        U, S, VT = backend.svd(core_mat)
+        core_mat_T = backend.transpose(core_mat)
+        Q, R = backend.qr(core_mat_T)
 
-        rank = len(S.data)
-        us_data = []
+        Qt = backend.transpose(Q)
+        Rt = backend.transpose(R)
 
-        for i in range(r_prev):
-            for j in range(rank):
-                us_data.append(
-                    U.data[i * rank + j] * S.data[j]
-                )
-
-        US = DenseTensor(
-            (r_prev, rank),
-            data=us_data
-        )
+        rank = Qt.shape[0]
 
         new_core = DenseTensor(
             (rank, n, r_next),
-            data=list(VT.data)
+            data=list(Qt.data)
         )
 
         tt_copy.cores[k] = new_core
@@ -161,7 +138,7 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                 for t in range(r_prev):
                     val += (
                             prev_mat.data[i * r_prev + t]
-                            * US.data[t * rank + j]
+                            * Rt.data[t * rank + j]
                     )
 
                 result_data.append(val)
