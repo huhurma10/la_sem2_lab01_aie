@@ -28,7 +28,6 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         core = tt_copy.cores[k]
         r_prev, n, r_next = core.shape
 
-        # Развернуть ядро в матрицу (r_prev * n) x r_next
         A_data = []
         for i in range(r_prev * n):
             for j in range(r_next):
@@ -38,10 +37,8 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         # SVD: A = U * S * V^T
         U, S, VT = backend.svd(A)
 
-        # Новый ранг – максимально возможный для сохранения ортогональности
         r_new = min(r_prev * n, r_next)
 
-        # Q = U (первые r_new столбцов) – ортонормированные столбцы
         Q_data = []
         for i in range(r_prev * n):
             for j in range(r_new):
@@ -114,7 +111,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         # SVD: A = U * S * V^T
         U, S, VT = backend.svd(A)
 
-        # Новый ранг – максимально возможный для сохранения ортогональности
         r_new = min(r_prev, n * r_next)
 
         # Q = V^T (первые r_new строк) – ортонормированные строки
@@ -124,7 +120,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                 Q_data.append(VT.data[i * (n * r_next) + j])
         Q = DenseTensor((r_new, n * r_next), data=Q_data)
 
-        # R = U * S (первые r_new столбцов U и первые r_new сингулярных значений)
         R_data = []
         for i in range(r_prev):
             for j in range(r_new):
@@ -143,7 +138,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                     new_core_data.append(Q.data[idx])
         tt_copy.cores[k] = DenseTensor((r_new, n, r_next), data=new_core_data)
 
-        # Поглотить R в предыдущее ядро: G_{k-1} = G_{k-1} * R
         prev_core = tt_copy.cores[k - 1]
         r_prev_prev, n_prev, _ = prev_core.shape
 
