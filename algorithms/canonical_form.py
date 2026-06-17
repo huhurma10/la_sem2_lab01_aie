@@ -92,7 +92,6 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         tt:      исходный тензор
         backend: интерфейс backend
     """
-    # Создаем копию тензора
     tt_copy = TTTensor([core.copy() for core in tt.cores])
     d = tt_copy.order
 
@@ -100,72 +99,77 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         core = tt_copy.cores[k]
         r_prev, n, r_next = core.shape
 
-        core_mat_data = []
-        for i in range(r_prev):
-            for j in range(n * r_next):
-                core_mat_data.append(core.data[i * n * r_next + j])
-        core_mat = DenseTensor((r_prev, n * r_next), data=core_mat_data)
+        core_mat = DenseTensor(
+            (r_prev, n * r_next),
+            data=list(core.data)
+        )
 
-        # SVD разложение
         U, S, VT = backend.svd(core_mat)
 
         rank = len(S.data)
+        us_data = []
 
-        Q_data = []
         for i in range(r_prev):
             for j in range(rank):
-                Q_data.append(U.data[i * U.shape[1] + j])
-        Q = DenseTensor((r_prev, rank), data=Q_data)
-        R_data = []
-        for i in range(rank):
-            for j in range(n * r_next):
+                us_data.append(
+                    U.data[i * rank + j] * S.data[j]
+                )
+
+        US = DenseTensor(
+            (r_prev, rank),
+            data=us_data
+        )
+
+        new_core = DenseTensor(
+            (rank, n, r_next),
+            data=list(VT.data)
+        )
+
+        tt_copy.cores[k] = new_core
+        prev_core = tt_copy.cores[k - 1]
+
+        r_prev_prev, n_prev, r_prev_check = prev_core.shape
+
+        if r_prev_check != r_prev:
+            raise ValueError(
+                f"Несогласованные ранги: "
+                f"{r_prev_check} != {r_prev}"
+            )
+
+        prev_mat_data = []
+
+        for i in range(r_prev_prev):
+            for j in range(n_prev):
+                for t in range(r_prev):
+                    idx = (
+                            i * n_prev * r_prev
+                            + j * r_prev
+                            + t
+                    )
+                    prev_mat_data.append(prev_core.data[idx])
+
+        prev_mat = DenseTensor(
+            (r_prev_prev * n_prev, r_prev),
+            data=prev_mat_data
+        )
+        result_data = []
+
+        for i in range(r_prev_prev * n_prev):
+            for j in range(rank):
+
                 val = 0.0
-                for s in range(rank):
-                    val += S.data[s] * VT.data[s * (n * r_next) + j]
-                R_data.append(val)
-        R = DenseTensor((rank, n * r_next), data=R_data)
 
-        new_core_data = []
-        for r in range(r_prev):
-            for ni in range(n):
-                for s in range(rank):
-                    # Q - это матрица (r_prev, rank)
-                    new_core_data.append(Q.data[r * rank + s])
-        tt_copy.cores[k] = DenseTensor((r_prev, n, rank), data=new_core_data)
+                for t in range(r_prev):
+                    val += (
+                            prev_mat.data[i * r_prev + t]
+                            * US.data[t * rank + j]
+                    )
 
-        # Умножаем предыдущее ядро на R
-        if k - 1 >= 0:
-            prev_core = tt_copy.cores[k - 1]
-            r_prev_prev = prev_core.shape[0]
-            n_prev = prev_core.shape[1]
-
-            r_core_data = []
-            for i in range(rank):
-                for ni in range(n):
-                    for j in range(r_next):
-                        idx = i * n * r_next + ni * r_next + j
-                        r_core_data.append(R.data[idx])
-            R_core = DenseTensor((rank, n, r_next), data=r_core_data)
-
-            prev_mat_data = []
-            for i in range(r_prev_prev * n_prev):
-                for j in range(r_prev):
-                    prev_mat_data.append(prev_core.data[i * r_prev + j])
-            prev_mat = DenseTensor((r_prev_prev * n_prev, r_prev), data=prev_mat_data)
-            result_mat_data = []
-            for i in range(r_prev_prev * n_prev):
-                for j in range(n * r_next):
-                    val = 0.0
-                    for t in range(r_prev):
-                        val += prev_mat.data[i * r_prev + t] * R.data[t * (n * r_next) + j]
-                    result_mat_data.append(val)
-            result_mat = DenseTensor((r_prev_prev * n_prev, n * r_next), data=result_mat_data)
-            new_prev_data = []
-            for i in range(r_prev_prev * n_prev):
-                for j in range(rank):
-                    new_prev_data.append(result_mat.data[i * (n * r_next) + j])
-
-            tt_copy.cores[k - 1] = DenseTensor((r_prev_prev, n_prev, rank), data=new_prev_data)
+                result_data.append(val)
+        tt_copy.cores[k - 1] = DenseTensor(
+            (r_prev_prev, n_prev, rank),
+            data=result_data
+        )
 
     return tt_copy
 
