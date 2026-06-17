@@ -27,8 +27,7 @@ def tt_round(
         max_rank: максимальный TT-ранг (None = без ограничения)
         eps:      относительная точность усечения
     """
-    tt_tmp = TTTensor([core.copy() for core in tt.cores])
-    right_canonicalize(tt_tmp, backend)
+    tt_tmp = right_canonicalize(TTTensor([core.copy() for core in tt.cores]), backend)
 
     new_cores = []
 
@@ -80,18 +79,20 @@ def tt_round(
         U_for_core = _truncate_columns(U, rank, backend)
 
         new_core_k_data = []
+        US_data = []
+        m = U_for_core.shape[0]
+
+        for i in range(m):
+            for j in range(rank):
+                US_data.append(U_for_core.data[i * rank + j] * S_trunc.data[j])
+
+        US = DenseTensor((m, rank), data=US_data)
+
         for r_prev_idx in range(r_prev):
             for n_idx in range(n):
                 for rank_idx in range(rank):
-                    current_u_part = _multiply_diag_matrix(
-                        S_trunc,
-                        U_for_core,
-                        rank,
-                        backend
-                    )
-
-                    flat_idx_in_u = (r_prev_idx * n + n_idx) * rank + rank_idx
-                    new_core_k_data.append(current_u_part.data[flat_idx_in_u])
+                    flat_idx = (r_prev_idx * n + n_idx) * rank + rank_idx
+                    new_core_k_data.append(US.data[flat_idx])
 
         new_cores.append(DenseTensor((r_prev, n, rank), data=new_core_k_data))
 
@@ -138,7 +139,7 @@ def _compute_rank(
 
     for r, s in enumerate(S.data):
         if s <= threshold:
-            rank = r + 1
+            rank = r
             break
     else:
         rank = len(S.data)
@@ -233,7 +234,7 @@ def _multiply_diag_matrix(
     """
     if len(diag_vec.shape) != 1 or diag_vec.shape[0] != rank:
         raise ValueError(f"diag_vec должен быть одномерным формы ({rank},)")
-    if len(matrix.shape) != 2 or matrix.shape[0] != rank and matrix.shape[1] != rank:
+    if (len(matrix.shape) != 2) or (matrix.shape[0] != rank and matrix.shape[1] != rank):
         raise ValueError(f"matrix должна быть двумерной с одной из размерностей равной {rank}")
 
     result_data = []

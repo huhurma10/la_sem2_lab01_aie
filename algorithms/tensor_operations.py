@@ -50,40 +50,112 @@ def tt_add(
     d = tt1.order
     new_cores = []
 
-    for k in range(d):
-        core1 = tt1.cores[k]
-        core2 = tt2.cores[k]
+    for core_idx in range(d):
+        core1 = tt1.cores[core_idx]
+        core2 = tt2.cores[core_idx]
 
         r1_prev, n1, r1_next = core1.shape
         r2_prev, n2, r2_next = core2.shape
 
         # Проверяем, что размерности мод совпадают
         if n1 != n2:
-            raise ValueError(f"Размерность моды {k} не совпадает: {n1} vs {n2}")
+            raise ValueError(f"Размерность моды {core_idx} не совпадает: {n1} vs {n2}")
         n = n1
 
-        # Новые ранги: сумма рангов
-        r_prev = r1_prev + r2_prev
-        r_next = r1_next + r2_next
+        if core_idx == 0:
+            data = []
 
-        # Создаем новое ядро размером (r_prev, n, r_next)
-        new_core_data = []
-        for i in range(r_prev):
-            for j in range(n):
-                for k_idx in range(r_next):
-                    if i < r1_prev and k_idx < r1_next:
-                        # Берем из первого ядра
-                        val = core1.data[i * n * r1_next + j * r1_next + k_idx]
-                    elif i >= r1_prev and k_idx >= r1_next:
-                        # Берем из второго ядра
-                        i2 = i - r1_prev
-                        k2 = k_idx - r1_next
-                        val = core2.data[i2 * n * r2_next + j * r2_next + k2]
-                    else:
-                        val = 0.0
-                    new_core_data.append(float(val))
+            for i in range(1):
+                for j in range(n):
+                    for k in range(r1_next):
+                        data.append(float(
+                            core1.data[
+                                i * n * r1_next +
+                                j * r1_next +
+                                k]))
 
-        new_cores.append(DenseTensor((r_prev, n, r_next), data=new_core_data))
+                    for k in range(r2_next):
+                        data.append(
+                            float(
+                                core2.data[
+                                    i * n * r2_next +
+                                    j * r2_next +
+                                    k]))
+
+            new_cores.append(
+                DenseTensor(
+                    (1, n, r1_next + r2_next),
+                    data=data))
+
+        elif core_idx == d - 1:
+            data = []
+
+            for i in range(r1_prev):
+                for j in range(n):
+                    data.append(
+                        float(
+                            core1.data[
+                                i * n * r1_next +
+                                j * r1_next
+                                ]
+                        )
+                    )
+
+            for i in range(r2_prev):
+                for j in range(n):
+                    data.append(
+                        float(
+                            core2.data[
+                                i * n * r2_next +
+                                j * r2_next
+                                ]
+                        )
+                    )
+
+            new_cores.append(
+                DenseTensor(
+                    (r1_prev + r2_prev, n, 1),
+                    data=data
+                )
+            )
+
+        else:
+            r_prev = r1_prev + r2_prev
+            r_next = r1_next + r2_next
+
+            data = []
+
+            for i in range(r_prev):
+                for j in range(n):
+                    for k in range(r_next):
+
+                        if i < r1_prev and k < r1_next:
+                            val = core1.data[
+                                i * n * r1_next +
+                                j * r1_next +
+                                k
+                                ]
+
+                        elif i >= r1_prev and k >= r1_next:
+                            i2 = i - r1_prev
+                            k2 = k - r1_next
+
+                            val = core2.data[
+                                i2 * n * r2_next +
+                                j * r2_next +
+                                k2
+                                ]
+
+                        else:
+                            val = 0.0
+
+                        data.append(float(val))
+
+            new_cores.append(DenseTensor(
+                (r_prev, n, r_next),
+                data=data
+            )
+            )
 
     return TTTensor(new_cores)
 
