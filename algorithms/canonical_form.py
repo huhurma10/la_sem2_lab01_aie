@@ -42,15 +42,14 @@ def left_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         for i in range(r_prev * n):
             for j in range(rank):
                 Q_data.append(U.data[i * U.shape[1] + j])
+
         Q = DenseTensor((r_prev * n, rank), data=Q_data)
 
         R_data = []
         for i in range(rank):
             for j in range(r_next):
-                val = 0.0
-                for s in range(rank):
-                    val += S.data[s] * VT.data[s * r_next + j]
-                R_data.append(val)
+                R_data.append(S.data[i] * VT.data[i * r_next + j])
+
         R = DenseTensor((rank, r_next), data=R_data)
 
         new_core_data = []
