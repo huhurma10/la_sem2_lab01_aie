@@ -79,20 +79,12 @@ def tt_round(
         U_for_core = _truncate_columns(U, rank, backend)
 
         new_core_k_data = []
-        US_data = []
-        m = U_for_core.shape[0]
-
-        for i in range(m):
-            for j in range(rank):
-                US_data.append(U_for_core.data[i * rank + j] * S_trunc.data[j])
-
-        US = DenseTensor((m, rank), data=US_data)
 
         for r_prev_idx in range(r_prev):
             for n_idx in range(n):
                 for rank_idx in range(rank):
                     flat_idx = (r_prev_idx * n + n_idx) * rank + rank_idx
-                    new_core_k_data.append(US.data[flat_idx])
+                    new_core_k_data.append(U_for_core.data[flat_idx])
 
         new_cores.append(DenseTensor((r_prev, n, rank), data=new_core_k_data))
 
