@@ -83,22 +83,37 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
         core = tt_copy.cores[k]
         r_prev, n, r_next = core.shape
 
-        # Преобразуем ядро в матрицу размера r_prev x (n * r_next)
+        # Развернуть ядро в матрицу A размера (r_prev) x (n * r_next)
         A_data = []
         for i in range(r_prev):
             for j in range(n * r_next):
                 A_data.append(core.data[i * n * r_next + j])
         A = DenseTensor((r_prev, n * r_next), data=A_data)
 
-        # RQ-разложение через QR на транспонированной
-        A_T = backend.transpose(A)  # размер (n * r_next, r_prev)
-        Q_tilde, R_tilde = backend.qr(A_T)  # Q_tilde: (n * r_next, rank), R_tilde: (rank, r_prev)
-        Q = backend.transpose(Q_tilde)  # (rank, n * r_next) с ортонормированными строками
-        R = backend.transpose(R_tilde)  # (r_prev, rank)
+        # SVD: A = U * S * V^T
+        U, S, VT = backend.svd(A)
 
-        rank = Q.shape[0]  # новое r_k
+        # Ранг = min(r_prev, n * r_next) – сохраняем всю информацию
+        rank = min(r_prev, n * r_next)
 
-        # Новое ядро: свернуть Q в размер (rank, n, r_next)
+        # Q = V^T (первые rank строк) – ортонормированные строки
+        Q_data = []
+        for i in range(rank):
+            for j in range(n * r_next):
+                Q_data.append(VT.data[i * (n * r_next) + j])
+        Q = DenseTensor((rank, n * r_next), data=Q_data)
+
+        # R = U * S (первые rank столбцов U и первые rank сингулярных значений)
+        R_data = []
+        for i in range(r_prev):
+            for j in range(rank):
+                val = 0.0
+                for s in range(rank):
+                    val += U.data[i * U.shape[1] + s] * S.data[s]
+                R_data.append(val)
+        R = DenseTensor((r_prev, rank), data=R_data)
+
+        # Новое ядро G_k: свернуть Q в тензор (rank, n, r_next)
         new_core_data = []
         for i in range(rank):
             for j in range(n):
@@ -107,7 +122,7 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                     new_core_data.append(Q.data[idx])
         tt_copy.cores[k] = DenseTensor((rank, n, r_next), data=new_core_data)
 
-        # Обновляем предыдущее ядро: G_{k-1} = G_{k-1} * R
+        # Поглотить R в предыдущее ядро: G_{k-1} = G_{k-1} * R
         prev_core = tt_copy.cores[k - 1]
         r_prev_prev, n_prev, _ = prev_core.shape
 
@@ -118,7 +133,7 @@ def right_canonicalize(tt: TTTensor, backend: BackendInterface) -> TTTensor:
                 prev_mat_data.append(prev_core.data[i * r_prev + j])
         prev_mat = DenseTensor((r_prev_prev * n_prev, r_prev), data=prev_mat_data)
 
-        # Умножение prev_mat * R: (r_prev_prev * n_prev) x rank
+        # Умножить prev_mat на R: (r_prev_prev * n_prev) x rank
         result_data = []
         for i in range(r_prev_prev * n_prev):
             for j in range(rank):
